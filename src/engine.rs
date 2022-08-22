@@ -1,102 +1,21 @@
-use std::{collections::HashSet, fmt::Display, vec};
-
-pub struct ScalarTensorFactory {
-    tensors: Vec<ScalarTensor>,
-}
-
-impl ScalarTensorFactory {
-    pub fn new() -> Self {
-        Self { tensors: vec![] }
-    }
-
-    pub fn tensor(&mut self, data: f32) -> usize {
-        let index = self.tensors.len();
-        self.tensors.push(ScalarTensor::new_leaf(data, index));
-        index
-    }
-
-    pub fn addition_tensor(&mut self, lhs_index: usize, rhs_index: usize) -> usize {
-        let index = self.tensors.len();
-        let lhs = self.tensors[lhs_index].data;
-        let rhs = self.tensors[rhs_index].data;
-        self.tensors.push(ScalarTensor::new(
-            lhs + rhs,
-            index,
-            vec![lhs_index, rhs_index], // maybe hashset?
-            Op::ADD,
-        ));
-        index
-    }
-
-    fn build_topo(
-        &self,
-        current: &ScalarTensor,
-        visited: &mut HashSet<usize>,
-        topo: &mut Vec<usize>,
-    ) {
-        match visited.get(&current.index) {
-            Some(_) => (),
-            None => {
-                visited.insert(current.index);
-                for child in current.children.iter() {
-                    self.build_topo(&self.tensors[*child], visited, topo);
-                }
-                topo.push(current.index);
-            }
-        }
-    }
-
-    fn build_reversed_topo(&self, tensor: &ScalarTensor) -> Vec<usize> {
-        let mut visited = HashSet::new();
-        let mut topo = Vec::new();
-        self.build_topo(tensor, &mut visited, &mut topo);
-        topo.reverse();
-        topo
-    }
-
-    fn grad_fn(&mut self, index: usize) {
-        match self.tensors[index].op {
-            Op::NONE => (),
-            Op::ADD => {
-                // Apply the chain rule by getting the local derivative (which is 1 for addition) and multiplying
-                // by the up until now calculated derivative
-                let current_tensor = &self.tensors[index];
-                let grad = current_tensor.grad;
-                let indexes = current_tensor.children.clone();
-                for child_index in indexes {
-                    self.tensors[child_index].grad += grad * 1.0; // just for clarity
-                }
-            }
-        }
-    }
-
-    pub fn backward(&mut self, index: usize) {
-        self.tensors[index].grad = 1.0;
-        let tensor = &self.tensors[index];
-        let topo = self.build_reversed_topo(tensor);
-        for index in topo {
-            self.grad_fn(index);
-        }
-    }
-}
+use std::{cell::RefCell, fmt::Display, rc::Rc};
 
 ///
 /// Scalar tensor is a single value object that stores it's
 /// data and it's gradient.
 /// In order for backpropogation to work correctly we also need to store
 /// the building blocks of this tensor - the so called children.
-/// Childen is a usize vec because I don't know enough rust and I couldn't
-/// get this to store references to the ScalarTensors that created this, so instead
-/// we store an index into a singleton object that holds all ScalarTensors
-/// Index is the index inside that singleton
+#[derive(Debug)]
 pub struct ScalarTensor {
     pub data: f32,
     pub grad: f32,
-    index: usize,
-    children: Vec<usize>,
+    children: Rc<RefCell<Vec<MutableScalarTensor>>>,
     op: Op,
 }
 
+type MutableScalarTensor = Rc<RefCell<ScalarTensor>>;
+
+#[derive(Debug, PartialEq)]
 enum Op {
     NONE,
     ADD,
@@ -116,25 +35,48 @@ impl Display for ScalarTensor {
     }
 }
 
+pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
+    let new_tensor = Rc::new(RefCell::new(ScalarTensor {
+        data: rhs.borrow().data + lhs.borrow().data,
+        grad: 0.0,
+        children: Rc::new(RefCell::new(Vec::new())),
+        op: Op::ADD,
+    }));
+
+    {
+        let tmp = new_tensor.borrow_mut();
+        let mut children = tmp.children.borrow_mut();
+        children.push(rhs.clone());
+        children.push(lhs.clone());
+    }
+    new_tensor
+}
+
 impl ScalarTensor {
-    fn new_leaf(data: f32, index: usize) -> Self {
-        Self {
+    pub fn new(data: f32) -> MutableScalarTensor {
+        Rc::new(RefCell::new(Self {
             data,
             grad: 0.0,
-            index,
-            children: vec![],
+            children: Rc::new(RefCell::new(Vec::new())),
             op: Op::NONE,
+        }))
+    }
+
+    fn grad_fn(&self) {
+        match self.op {
+            Op::NONE => (),
+            Op::ADD => {
+                let children = self.children.borrow();
+                for child in children.iter() {
+                    child.borrow_mut().grad += self.grad * 1.0;
+                }
+            }
         }
     }
 
-    fn new(data: f32, index: usize, children: Vec<usize>, op: Op) -> Self {
-        Self {
-            data,
-            grad: 0.0,
-            index,
-            children,
-            op,
-        }
+    pub fn backward(&mut self) {
+        self.grad = 1.0;
+        self.grad_fn();
     }
 }
 
@@ -143,52 +85,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tensor_factory() {
-        let mut f = ScalarTensorFactory::new();
-        let index = f.tensor(5.0);
-        let t = &f.tensors[index];
-        assert_eq!(1, f.tensors.len());
+    fn test_tensor() {
+        let a = ScalarTensor::new(5.0);
+        let t = a.borrow();
         assert_eq!(5.0, t.data);
-        assert_eq!(0, t.children.len());
-        assert_eq!(0, t.index);
-
-        let i2 = f.tensor(3.14);
-        let t2 = &f.tensors[i2];
-        assert_eq!(3.14, t2.data);
-        assert_eq!(1, t2.index);
-        assert_eq!(2, f.tensors.len());
+        assert_eq!(0, t.children.borrow().len());
+        assert_eq!(Op::NONE, t.op);
     }
 
     #[test]
-    fn test_addition_tensor() {
-        let mut f = ScalarTensorFactory::new();
-        let i1 = f.tensor(3.14);
-        let i2 = f.tensor(5.0);
-        let out_index = f.addition_tensor(i1, i2);
-        let t = &f.tensors[out_index];
-        assert_eq!(2, t.children.len());
-        assert_eq!(8.14, t.data);
+    fn test_addition() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(3.14);
+        let out_tensor = add(&t1, &t2);
+        let out = out_tensor.borrow();
+        assert_eq!(8.14, out.data);
+        assert_eq!(2, out.children.borrow().len());
+        assert_eq!(Op::ADD, out.op);
     }
 
     #[test]
-    fn test_build_reversed_topo() {
-        let mut f = ScalarTensorFactory::new();
-        let i1 = f.tensor(3.14);
-        let i2 = f.tensor(5.0);
-        let out_index = f.addition_tensor(i1, i2);
-        let topo = f.build_reversed_topo(&f.tensors[out_index]);
-        assert_eq!(vec![out_index, i2, i1], topo);
-    }
-
-    #[test]
-    fn test_addition_backward() {
-        let mut f = ScalarTensorFactory::new();
-        let i1 = f.tensor(3.14);
-        let i2 = f.tensor(5.0);
-        let out_index = f.addition_tensor(i1, i2);
-        f.backward(out_index);
-        assert_eq!(1.0, f.tensors[i1].grad);
-        assert_eq!(1.0, f.tensors[i2].grad);
-        assert_eq!(1.0, f.tensors[out_index].grad);
+    fn test_grad_fn() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(3.14);
+        let out = add(&t1, &t2);
+        assert_eq!(0.0, t1.borrow().grad);
+        assert_eq!(0.0, t2.borrow().grad);
+        out.borrow_mut().grad = 1.0;
+        out.borrow().grad_fn();
+        assert_eq!(1.0, t1.borrow().grad);
+        assert_eq!(1.0, t2.borrow().grad);
     }
 }
