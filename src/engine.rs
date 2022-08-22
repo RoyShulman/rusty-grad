@@ -1,4 +1,13 @@
-use std::{cell::RefCell, fmt::Display, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashSet,
+    fmt::Display,
+    hash::{Hash, Hasher},
+    rc::Rc,
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+static OBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 ///
 /// Scalar tensor is a single value object that stores it's
@@ -11,6 +20,7 @@ pub struct ScalarTensor {
     pub grad: f32,
     children: Vec<MutableScalarTensor>,
     op: Op,
+    unique_id: usize,
 }
 
 type MutableScalarTensor = Rc<RefCell<ScalarTensor>>;
@@ -35,12 +45,27 @@ impl Display for ScalarTensor {
     }
 }
 
+impl Hash for ScalarTensor {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.unique_id.hash(state);
+    }
+}
+
+impl PartialEq for ScalarTensor {
+    fn eq(&self, other: &Self) -> bool {
+        self.unique_id == other.unique_id
+    }
+}
+
+impl Eq for ScalarTensor {}
+
 pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
     let new_tensor = Rc::new(RefCell::new(ScalarTensor {
         data: rhs.borrow().data + lhs.borrow().data,
         grad: 0.0,
         children: Vec::new(),
         op: Op::ADD,
+        unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
     }));
 
     {
@@ -51,6 +76,40 @@ pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScala
     new_tensor
 }
 
+fn get_topo_graph_for_tensor(
+    tensor: &MutableScalarTensor,
+    visited: &mut HashSet<usize>,
+    topo_graph: &mut Vec<MutableScalarTensor>,
+) {
+    if visited.contains(&tensor.borrow().unique_id) {
+        return;
+    }
+
+    visited.insert(tensor.borrow().unique_id);
+    for child in tensor.borrow().children.iter() {
+        get_topo_graph_for_tensor(child, visited, topo_graph);
+    }
+    topo_graph.push(tensor.clone());
+}
+
+fn get_reversed_topo_graph(tensor: &MutableScalarTensor) -> Vec<MutableScalarTensor> {
+    let mut topo_graph = Vec::new();
+    get_topo_graph_for_tensor(tensor, &mut HashSet::new(), &mut topo_graph);
+    topo_graph.reverse();
+    topo_graph
+}
+
+// Apply back backpropagation to this tensor
+pub fn backward(tensor: &MutableScalarTensor) {
+    // First we initialize the root node with gradient of 1.0
+    tensor.borrow_mut().grad = 1.0;
+    let topo_graph = get_reversed_topo_graph(tensor);
+    for t in topo_graph.iter() {
+        // Now apply the grad function on each tensor
+        t.borrow().grad_fn();
+    }
+}
+
 impl ScalarTensor {
     pub fn new(data: f32) -> MutableScalarTensor {
         Rc::new(RefCell::new(Self {
@@ -58,6 +117,7 @@ impl ScalarTensor {
             grad: 0.0,
             children: Vec::new(),
             op: Op::NONE,
+            unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
         }))
     }
 
@@ -72,14 +132,6 @@ impl ScalarTensor {
                 }
             }
         }
-    }
-
-    // fn get_reversed_topo_graph(&self) ->
-
-    // Apply back backpropagation to this tensor
-    pub fn backward(&mut self) {
-        self.grad = 1.0;
-        self.grad_fn();
     }
 }
 
@@ -118,5 +170,52 @@ mod tests {
         out.borrow().grad_fn();
         assert_eq!(1.0, t1.borrow().grad);
         assert_eq!(1.0, t2.borrow().grad);
+    }
+
+    #[test]
+    fn test_topo_graph() {
+        let t1 = ScalarTensor::new(123.0);
+        let t2 = ScalarTensor::new(11.0);
+        let out1 = add(&t1, &t2);
+        let out2 = add(&t1, &t2);
+        let out3 = add(&out1, &out2);
+
+        let topo_graph = get_reversed_topo_graph(&out3);
+        let expected_vec = vec![
+            out3.borrow(),
+            out2.borrow(),
+            out1.borrow(),
+            t2.borrow(),
+            t1.borrow(),
+        ];
+
+        assert_eq!(expected_vec.len(), topo_graph.len());
+        for (expected, real) in expected_vec.iter().zip(topo_graph.iter()) {
+            assert_eq!(expected.unique_id, real.borrow().unique_id);
+        }
+    }
+
+    #[test]
+    fn test_backward() {
+        let t1 = ScalarTensor::new(123.0);
+        let t2 = ScalarTensor::new(11.0);
+        let out1 = add(&t1, &t2);
+        let out2 = add(&t1, &t2);
+        let out3 = add(&out1, &out2);
+
+        backward(&out3);
+        for t in vec![out1, out2, out3] {
+            assert_eq!(1.0, t.borrow().grad);
+        }
+
+        // t1 and t2 are both contributing to 2 other tensors, so their gradient should
+        // be 2.0. This can be shown as
+        // out3 = out2 + out1 = (t1 + t2) + (t1 + t2)
+        // Thus if we increase t1 by h for example we get
+        // (t1 + h + t2) + (t1 +h + t2) = out3 + 2h
+        // a change in t1 will have double the change on out3
+        for t in vec![t1, t2] {
+            assert_eq!(2.0, t.borrow().grad);
+        }
     }
 }
