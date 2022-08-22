@@ -68,12 +68,18 @@ impl ScalarTensor {
             Op::ADD => {
                 let children = self.children.borrow();
                 for child in children.iter() {
+                    // Local derivative of an addition is 1, and we apply the chain rule by
+                    // multiplying by the total grad so far
                     child.borrow_mut().grad += self.grad * 1.0;
                 }
             }
         }
     }
 
+    fn get_reversed_topo_graph(&self) -> 
+
+    ///
+    /// Apply back backpropagation to this tensor
     pub fn backward(&mut self) {
         self.grad = 1.0;
         self.grad_fn();
