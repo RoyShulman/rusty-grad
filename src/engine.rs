@@ -297,4 +297,33 @@ mod tests {
         assert_eq!(t1.borrow().grad, 2.0 * 321.123 * (123.321 * 321.123));
         assert_eq!(t2.borrow().grad, 2.0 * 123.321 * (123.321 * 321.123));
     }
+
+    #[test]
+    fn test_backward_add_mul() {
+        let t1 = ScalarTensor::new(123.321);
+        let t2 = ScalarTensor::new(321.123);
+        let out1 = add(&t1, &t2);
+        let out2 = mul(&t1, &t2);
+        let out3 = mul(&out1, &out2);
+
+        backward(&out3);
+        {
+            let t1 = t1.borrow();
+            let t2 = t2.borrow();
+            let out1 = out1.borrow();
+            let out2 = out2.borrow();
+            let out3 = out3.borrow();
+
+            // (t1*t2)*(t1+t2)
+            assert_eq!(out3.grad, 1.0);
+            assert_eq!(out2.grad, t1.data + t2.data);
+            assert_eq!(out1.grad, t1.data * t2.data);
+            // dt1/dou3 = 2t1*t2 + t2**2
+            assert_eq!(t1.grad, 2.0 * t1.data * t2.data + t2.data * t2.data);
+            // dt2 / dout3 = 2t1*t2 + t1**2
+            assert_eq!(t2.grad, 2.0 * t1.data * t2.data + t1.data * t1.data);
+        }
+
+        // The equation is (t1*t2)*(t1*t2)
+    }
 }
