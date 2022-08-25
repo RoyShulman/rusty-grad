@@ -29,6 +29,7 @@ type MutableScalarTensor = Rc<RefCell<ScalarTensor>>;
 enum Op {
     NONE,
     ADD,
+    MUL,
 }
 
 impl Display for ScalarTensor {
@@ -36,6 +37,7 @@ impl Display for ScalarTensor {
         let op_string = match self.op {
             Op::NONE => "",
             Op::ADD => "+",
+            Op::MUL => "*",
         };
         write!(
             f,
@@ -59,20 +61,22 @@ impl PartialEq for ScalarTensor {
 
 impl Eq for ScalarTensor {}
 
-pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
-    let new_tensor = Rc::new(RefCell::new(ScalarTensor {
-        data: rhs.borrow().data + lhs.borrow().data,
-        grad: 0.0,
-        children: Vec::new(),
-        op: Op::ADD,
-        unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
-    }));
-
-    {
-        let mut tmp = new_tensor.borrow_mut();
-        tmp.children.push(rhs.clone());
-        tmp.children.push(lhs.clone());
+fn add_to_children(tensor: &MutableScalarTensor, tensors_to_add: &Vec<MutableScalarTensor>) {
+    let mut tmp = tensor.borrow_mut();
+    for c in tensors_to_add.iter() {
+        tmp.children.push(c.clone());
     }
+}
+
+pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
+    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data + lhs.borrow().data, Op::ADD);
+    add_to_children(&new_tensor, &vec![rhs.clone(), lhs.clone()]);
+    new_tensor
+}
+
+pub fn mul(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
+    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data * lhs.borrow().data, Op::MUL);
+    add_to_children(&new_tensor, &vec![rhs.clone(), lhs.clone()]);
     new_tensor
 }
 
@@ -111,14 +115,18 @@ pub fn backward(tensor: &MutableScalarTensor) {
 }
 
 impl ScalarTensor {
-    pub fn new(data: f32) -> MutableScalarTensor {
+    fn new_with_op(data: f32, op: Op) -> MutableScalarTensor {
         Rc::new(RefCell::new(Self {
             data,
             grad: 0.0,
             children: Vec::new(),
-            op: Op::NONE,
+            op: op,
             unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
         }))
+    }
+
+    pub fn new(data: f32) -> MutableScalarTensor {
+        Self::new_with_op(data, Op::NONE)
     }
 
     fn grad_fn(&self) {
@@ -130,6 +138,15 @@ impl ScalarTensor {
                     // multiplying by the total grad so far
                     child.borrow_mut().grad += self.grad * 1.0;
                 }
+            }
+            Op::MUL => {
+                // TODO: make this safe (should do for everything else as well)
+                // Local derivative of multiplication is the number we are
+                // multiplying by so
+                let mut left = self.children[0].borrow_mut();
+                let mut right = self.children[1].borrow_mut();
+                left.grad += right.data * self.grad;
+                right.grad += left.data * self.grad;
             }
         }
     }
@@ -160,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn test_grad_fn() {
+    fn test_grad_fn_only_add() {
         let t1 = ScalarTensor::new(5.0);
         let t2 = ScalarTensor::new(3.14);
         let out = add(&t1, &t2);
@@ -196,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backward() {
+    fn test_backward_add_only() {
         let t1 = ScalarTensor::new(123.0);
         let t2 = ScalarTensor::new(11.0);
         let out1 = add(&t1, &t2);
@@ -217,5 +234,67 @@ mod tests {
         for t in vec![t1, t2] {
             assert_eq!(2.0, t.borrow().grad);
         }
+    }
+
+    #[test]
+    fn test_mul() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(6.5);
+        let out_tensor = mul(&t1, &t2);
+        let out = out_tensor.borrow();
+        assert_eq!(32.5, out.data);
+        assert_eq!(2, out.children.len());
+        assert_eq!(Op::MUL, out.op);
+    }
+
+    #[test]
+    fn test_grad_fn_only_mul() {
+        let t1 = ScalarTensor::new(3.0);
+        let t2 = ScalarTensor::new(7.2);
+        let out = mul(&t1, &t2);
+        assert_eq!(0.0, t1.borrow().grad);
+        assert_eq!(0.0, t2.borrow().grad);
+        out.borrow_mut().grad = 1.0;
+        out.borrow().grad_fn();
+        assert_eq!(7.2, t1.borrow().grad);
+        assert_eq!(3.0, t2.borrow().grad);
+    }
+
+    #[test]
+    fn test_backward_mul_only_simple() {
+        let t1 = ScalarTensor::new(2.0);
+        let t2 = ScalarTensor::new(3.0);
+        let out1 = mul(&t1, &t2);
+        let out2 = mul(&t1, &t2);
+        let out3 = mul(&out1, &out2);
+
+        backward(&out3);
+
+        // The equation is (t1*t2)*(t1*t2)
+        assert_eq!(out3.borrow().grad, 1.0);
+        assert_eq!(out2.borrow().grad, 2.0 * 3.0);
+        assert_eq!(out1.borrow().grad, 2.0 * 3.0);
+
+        // f(x+h) - f(x) / h = the derivative, so dt1((t1*t2)*(t1*t2))/dout3 = 2t1*t2**2
+        assert_eq!(t1.borrow().grad, 2.0 * 2.0 * 3.0 * 3.0);
+        assert_eq!(t2.borrow().grad, 2.0 * 3.0 * 2.0 * 2.0);
+    }
+
+    #[test]
+    fn test_backward_mul_only() {
+        let t1 = ScalarTensor::new(123.321);
+        let t2 = ScalarTensor::new(321.123);
+        let out1 = mul(&t1, &t2);
+        let out2 = mul(&t1, &t2);
+        let out3 = mul(&out1, &out2);
+
+        backward(&out3);
+
+        // The equation is (t1*t2)*(t1*t2)
+        assert_eq!(out3.borrow().grad, 1.0);
+        assert_eq!(out2.borrow().grad, 123.321 * 321.123);
+        assert_eq!(out1.borrow().grad, 123.321 * 321.123);
+        assert_eq!(t1.borrow().grad, 2.0 * 321.123 * (123.321 * 321.123));
+        assert_eq!(t2.borrow().grad, 2.0 * 123.321 * (123.321 * 321.123));
     }
 }
