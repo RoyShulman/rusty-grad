@@ -185,11 +185,43 @@ impl<'a, 'b> Add<&'b MutableScalarTensor> for &'a MutableScalarTensor {
     }
 }
 
+impl<'a> Add<f32> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn add(self, rhs: f32) -> Self::Output {
+        add_tensors(self, &ScalarTensor::new(rhs))
+    }
+}
+
 impl<'a, 'b> Mul<&'b MutableScalarTensor> for &'a MutableScalarTensor {
     type Output = MutableScalarTensor;
 
     fn mul(self, rhs: &'b MutableScalarTensor) -> Self::Output {
         mul_tensors(self, rhs)
+    }
+}
+
+impl<'a> Mul<f32> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn mul(self, rhs: f32) -> Self::Output {
+        mul_tensors(self, &ScalarTensor::new(rhs))
+    }
+}
+
+impl<'a> Add<&'a MutableScalarTensor> for f32 {
+    type Output = MutableScalarTensor;
+
+    fn add(self, rhs: &'a MutableScalarTensor) -> Self::Output {
+        add_tensors(&ScalarTensor::new(self), rhs)
+    }
+}
+
+impl<'a> Mul<&'a MutableScalarTensor> for f32 {
+    type Output = MutableScalarTensor;
+
+    fn mul(self, rhs: &'a MutableScalarTensor) -> Self::Output {
+        mul_tensors(&ScalarTensor::new(self), rhs)
     }
 }
 
@@ -404,5 +436,45 @@ mod tests {
         assert_eq!(15.5, out.data);
         assert_eq!(2, out.children.len());
         assert_eq!(Op::MUL, out.op);
+    }
+
+    #[test]
+    fn test_add_tensor_and_f32() {
+        let t1 = ScalarTensor::new(5.0);
+        let out = &t1 + 3.14;
+        {
+            let out = out.borrow();
+            assert_eq!(8.14, out.data);
+            assert_eq!(2, out.children.len());
+            assert_eq!(Op::ADD, out.op);
+        }
+
+        // Order doesn't matter
+        let out2 = 3.14 + &t1;
+        {
+            let out2 = out2.borrow();
+            assert_eq!(8.14, out2.data);
+            assert_eq!(2, out2.children.len());
+            assert_eq!(Op::ADD, out2.op);
+        }
+    }
+
+    #[test]
+    fn test_mul_tensor_and_number() {
+        let t1 = ScalarTensor::new(5.0);
+        let out_tensor = &t1 * 3.1;
+        let out = out_tensor.borrow();
+        assert_eq!(15.5, out.data);
+        assert_eq!(2, out.children.len());
+        assert_eq!(Op::MUL, out.op);
+
+        // Order doesn't matter
+        let out2 = 3.1 * &t1;
+        {
+            let out2 = out2.borrow();
+            assert_eq!(15.5, out2.data);
+            assert_eq!(2, out2.children.len());
+            assert_eq!(Op::MUL, out2.op);
+        }
     }
 }
