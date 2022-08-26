@@ -10,6 +10,7 @@ use std::{
 
 static OBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+pub(crate) type ScalarTensorUniqueID = usize;
 ///
 /// Scalar tensor is a single value object that stores it's
 /// data and it's gradient.
@@ -19,9 +20,9 @@ static OBJECT_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub struct ScalarTensor {
     pub data: f32,
     pub grad: f32,
-    children: Vec<MutableScalarTensor>,
-    op: Op,
-    unique_id: usize,
+    pub(crate) children: Vec<MutableScalarTensor>,
+    pub(crate) op: Op,
+    pub(crate) unique_id: ScalarTensorUniqueID,
 }
 
 #[derive(Debug)]
@@ -91,7 +92,7 @@ impl MutableScalarTensor {
 }
 
 #[derive(Debug, PartialEq)]
-enum Op {
+pub(crate) enum Op {
     NONE,
     ADD,
     MUL,
@@ -106,7 +107,7 @@ impl Display for ScalarTensor {
         };
         write!(
             f,
-            "(data: {} | grad: {} | op: {})",
+            "{{ data: {:.4} | grad: {:.4} | op: {} }}",
             self.data, self.grad, op_string
         )
     }
