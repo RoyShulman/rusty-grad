@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::{Add, Deref, DerefMut, Mul},
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -23,7 +24,71 @@ pub struct ScalarTensor {
     unique_id: usize,
 }
 
-type MutableScalarTensor = Rc<RefCell<ScalarTensor>>;
+#[derive(Debug)]
+pub struct MutableScalarTensor(Rc<RefCell<ScalarTensor>>);
+
+impl Deref for MutableScalarTensor {
+    type Target = Rc<RefCell<ScalarTensor>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for MutableScalarTensor {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Clone for MutableScalarTensor {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl MutableScalarTensor {
+    // Apply back backpropagation to this tensor
+    pub fn backward(&self) {
+        // First we initialize the root node with gradient of 1.0
+        self.borrow_mut().grad = 1.0;
+        let topo_graph = self.get_reversed_topo_graph();
+        for t in topo_graph.iter() {
+            // Now apply the grad function on each tensor
+            t.borrow().grad_fn();
+        }
+    }
+
+    fn get_topo_graph_for_tensor(
+        &self,
+        visited: &mut HashSet<usize>,
+        topo_graph: &mut Vec<MutableScalarTensor>,
+    ) {
+        if visited.contains(&self.borrow().unique_id) {
+            return;
+        }
+
+        visited.insert(self.borrow().unique_id);
+        for child in self.borrow().children.iter() {
+            child.get_topo_graph_for_tensor(visited, topo_graph);
+        }
+        topo_graph.push(self.clone());
+    }
+
+    fn get_reversed_topo_graph(&self) -> Vec<MutableScalarTensor> {
+        let mut topo_graph = Vec::new();
+        self.get_topo_graph_for_tensor(&mut HashSet::new(), &mut topo_graph);
+        topo_graph.reverse();
+        topo_graph
+    }
+
+    fn add_to_children(&self, tensors_to_add: &Vec<MutableScalarTensor>) {
+        let mut tmp = self.borrow_mut();
+        for c in tensors_to_add.iter() {
+            tmp.children.push(c.clone());
+        }
+    }
+}
 
 #[derive(Debug, PartialEq)]
 enum Op {
@@ -61,68 +126,15 @@ impl PartialEq for ScalarTensor {
 
 impl Eq for ScalarTensor {}
 
-fn add_to_children(tensor: &MutableScalarTensor, tensors_to_add: &Vec<MutableScalarTensor>) {
-    let mut tmp = tensor.borrow_mut();
-    for c in tensors_to_add.iter() {
-        tmp.children.push(c.clone());
-    }
-}
-
-pub fn add(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
-    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data + lhs.borrow().data, Op::ADD);
-    add_to_children(&new_tensor, &vec![rhs.clone(), lhs.clone()]);
-    new_tensor
-}
-
-pub fn mul(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
-    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data * lhs.borrow().data, Op::MUL);
-    add_to_children(&new_tensor, &vec![rhs.clone(), lhs.clone()]);
-    new_tensor
-}
-
-fn get_topo_graph_for_tensor(
-    tensor: &MutableScalarTensor,
-    visited: &mut HashSet<usize>,
-    topo_graph: &mut Vec<MutableScalarTensor>,
-) {
-    if visited.contains(&tensor.borrow().unique_id) {
-        return;
-    }
-
-    visited.insert(tensor.borrow().unique_id);
-    for child in tensor.borrow().children.iter() {
-        get_topo_graph_for_tensor(child, visited, topo_graph);
-    }
-    topo_graph.push(tensor.clone());
-}
-
-fn get_reversed_topo_graph(tensor: &MutableScalarTensor) -> Vec<MutableScalarTensor> {
-    let mut topo_graph = Vec::new();
-    get_topo_graph_for_tensor(tensor, &mut HashSet::new(), &mut topo_graph);
-    topo_graph.reverse();
-    topo_graph
-}
-
-// Apply back backpropagation to this tensor
-pub fn backward(tensor: &MutableScalarTensor) {
-    // First we initialize the root node with gradient of 1.0
-    tensor.borrow_mut().grad = 1.0;
-    let topo_graph = get_reversed_topo_graph(tensor);
-    for t in topo_graph.iter() {
-        // Now apply the grad function on each tensor
-        t.borrow().grad_fn();
-    }
-}
-
 impl ScalarTensor {
     fn new_with_op(data: f32, op: Op) -> MutableScalarTensor {
-        Rc::new(RefCell::new(Self {
+        MutableScalarTensor(Rc::new(RefCell::new(Self {
             data,
             grad: 0.0,
             children: Vec::new(),
             op: op,
             unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
-        }))
+        })))
     }
 
     pub fn new(data: f32) -> MutableScalarTensor {
@@ -152,6 +164,34 @@ impl ScalarTensor {
     }
 }
 
+fn add_tensors(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
+    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data + lhs.borrow().data, Op::ADD);
+    new_tensor.add_to_children(&vec![rhs.clone(), lhs.clone()]);
+    new_tensor
+}
+
+fn mul_tensors(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
+    let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data * lhs.borrow().data, Op::MUL);
+    new_tensor.add_to_children(&vec![rhs.clone(), lhs.clone()]);
+    new_tensor
+}
+
+impl<'a, 'b> Add<&'b MutableScalarTensor> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn add(self, rhs: &'b MutableScalarTensor) -> Self::Output {
+        add_tensors(self, rhs)
+    }
+}
+
+impl<'a, 'b> Mul<&'b MutableScalarTensor> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn mul(self, rhs: &'b MutableScalarTensor) -> Self::Output {
+        mul_tensors(self, rhs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,7 +209,7 @@ mod tests {
     fn test_addition() {
         let t1 = ScalarTensor::new(5.0);
         let t2 = ScalarTensor::new(3.14);
-        let out_tensor = add(&t1, &t2);
+        let out_tensor = &t1 + &t2;
         let out = out_tensor.borrow();
         assert_eq!(8.14, out.data);
         assert_eq!(2, out.children.len());
@@ -180,7 +220,7 @@ mod tests {
     fn test_grad_fn_only_add() {
         let t1 = ScalarTensor::new(5.0);
         let t2 = ScalarTensor::new(3.14);
-        let out = add(&t1, &t2);
+        let out = &t1 + &t2;
         assert_eq!(0.0, t1.borrow().grad);
         assert_eq!(0.0, t2.borrow().grad);
         out.borrow_mut().grad = 1.0;
@@ -193,11 +233,11 @@ mod tests {
     fn test_topo_graph() {
         let t1 = ScalarTensor::new(123.0);
         let t2 = ScalarTensor::new(11.0);
-        let out1 = add(&t1, &t2);
-        let out2 = add(&t1, &t2);
-        let out3 = add(&out1, &out2);
+        let out1 = &t1 + &t2;
+        let out2 = &t1 + &t2;
+        let out3 = &out1 + &out2;
 
-        let topo_graph = get_reversed_topo_graph(&out3);
+        let topo_graph = out3.get_reversed_topo_graph();
         let expected_vec = vec![
             out3.borrow(),
             out2.borrow(),
@@ -216,11 +256,11 @@ mod tests {
     fn test_backward_add_only() {
         let t1 = ScalarTensor::new(123.0);
         let t2 = ScalarTensor::new(11.0);
-        let out1 = add(&t1, &t2);
-        let out2 = add(&t1, &t2);
-        let out3 = add(&out1, &out2);
+        let out1 = &t1 + &t2;
+        let out2 = &t1 + &t2;
+        let out3 = &out1 + &out2;
 
-        backward(&out3);
+        out3.backward();
         for t in vec![out1, out2, out3] {
             assert_eq!(1.0, t.borrow().grad);
         }
@@ -240,7 +280,7 @@ mod tests {
     fn test_mul() {
         let t1 = ScalarTensor::new(5.0);
         let t2 = ScalarTensor::new(6.5);
-        let out_tensor = mul(&t1, &t2);
+        let out_tensor = &t1 * &t2;
         let out = out_tensor.borrow();
         assert_eq!(32.5, out.data);
         assert_eq!(2, out.children.len());
@@ -251,7 +291,7 @@ mod tests {
     fn test_grad_fn_only_mul() {
         let t1 = ScalarTensor::new(3.0);
         let t2 = ScalarTensor::new(7.2);
-        let out = mul(&t1, &t2);
+        let out = &t1 * &t2;
         assert_eq!(0.0, t1.borrow().grad);
         assert_eq!(0.0, t2.borrow().grad);
         out.borrow_mut().grad = 1.0;
@@ -264,11 +304,11 @@ mod tests {
     fn test_backward_mul_only_simple() {
         let t1 = ScalarTensor::new(2.0);
         let t2 = ScalarTensor::new(3.0);
-        let out1 = mul(&t1, &t2);
-        let out2 = mul(&t1, &t2);
-        let out3 = mul(&out1, &out2);
+        let out1 = &t1 * &t2;
+        let out2 = &t1 * &t2;
+        let out3 = &out1 * &out2;
 
-        backward(&out3);
+        out3.backward();
 
         // The equation is (t1*t2)*(t1*t2)
         assert_eq!(out3.borrow().grad, 1.0);
@@ -284,11 +324,11 @@ mod tests {
     fn test_backward_mul_only() {
         let t1 = ScalarTensor::new(123.321);
         let t2 = ScalarTensor::new(321.123);
-        let out1 = mul(&t1, &t2);
-        let out2 = mul(&t1, &t2);
-        let out3 = mul(&out1, &out2);
+        let out1 = &t1 * &t2;
+        let out2 = &t1 * &t2;
+        let out3 = &out1 * &out2;
 
-        backward(&out3);
+        out3.backward();
 
         // The equation is (t1*t2)*(t1*t2)
         assert_eq!(out3.borrow().grad, 1.0);
@@ -302,11 +342,11 @@ mod tests {
     fn test_backward_add_mul() {
         let t1 = ScalarTensor::new(123.321);
         let t2 = ScalarTensor::new(321.123);
-        let out1 = add(&t1, &t2);
-        let out2 = mul(&t1, &t2);
-        let out3 = mul(&out1, &out2);
+        let out1 = &t1 + &t2;
+        let out2 = &t1 * &t2;
+        let out3 = &out1 * &out2;
 
-        backward(&out3);
+        out3.backward();
         {
             let t1 = t1.borrow();
             let t2 = t2.borrow();
@@ -323,7 +363,45 @@ mod tests {
             // dt2 / dout3 = 2t1*t2 + t1**2
             assert_eq!(t2.grad, 2.0 * t1.data * t2.data + t1.data * t1.data);
         }
-
         // The equation is (t1*t2)*(t1*t2)
+    }
+
+    #[test]
+    fn test_backward_complex_add_mul() {
+        let t1 = ScalarTensor::new(123.321);
+        let t2 = ScalarTensor::new(321.123);
+        let out = &(&t1 * &t2) * &(&t1 + &t2);
+        out.backward();
+
+        {
+            let t1 = t1.borrow();
+            let t2 = t2.borrow();
+            let out = out.borrow();
+            assert_eq!(out.grad, 1.0);
+            assert_eq!(t1.grad, 2.0 * t1.data * t2.data + t2.data * t2.data);
+            assert_eq!(t2.grad, 2.0 * t1.data * t2.data + t1.data * t1.data);
+        }
+    }
+
+    #[test]
+    fn test_add_tensors() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(3.14);
+        let out_tensor = add_tensors(&t1, &t2);
+        let out = out_tensor.borrow();
+        assert_eq!(8.14, out.data);
+        assert_eq!(2, out.children.len());
+        assert_eq!(Op::ADD, out.op);
+    }
+
+    #[test]
+    fn test_mul_tensors() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(3.1);
+        let out_tensor = mul_tensors(&t1, &t2);
+        let out = out_tensor.borrow();
+        assert_eq!(15.5, out.data);
+        assert_eq!(2, out.children.len());
+        assert_eq!(Op::MUL, out.op);
     }
 }
