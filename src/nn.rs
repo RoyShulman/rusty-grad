@@ -142,6 +142,12 @@ impl MLP {
 
         panic!("No output was calculated! Are you sure you set the last layer to have a single neuron?");
     }
+    
+    pub fn scalar_forward(&self, x: &Vec<f32>) -> MutableScalarTensor {
+        let scalar_tensor_x = x.iter().map(|value| ScalarTensor::new(*value)).collect();
+        self.forward(&scalar_tensor_x)
+    }
+
 }
 
 impl Module for MLP {
@@ -192,17 +198,5 @@ mod tests {
         let mlp = MLP::new(10, vec![3, 2, 1]);
         // 33 + 8 + 3
         assert_eq!(44, mlp.parameters().len());
-        mlp.forward(&vec![
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-            ScalarTensor::new(1.0),
-        ]);
     }
 }

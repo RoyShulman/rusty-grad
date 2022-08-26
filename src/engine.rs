@@ -3,7 +3,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     hash::{Hash, Hasher},
-    ops::{Add, Deref, DerefMut, Mul},
+    ops::{Add, Deref, DerefMut, Mul, Sub},
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -23,6 +23,7 @@ pub struct ScalarTensor {
     pub(crate) children: Vec<MutableScalarTensor>,
     pub(crate) op: Op,
     pub(crate) unique_id: ScalarTensorUniqueID,
+    power: i32, // Only used for pow
 }
 
 #[derive(Debug)]
@@ -89,6 +90,13 @@ impl MutableScalarTensor {
             tmp.children.push(c.clone());
         }
     }
+
+    pub fn pow(&self, power: i32) -> Self {
+        let new_tensor = ScalarTensor::new_with_op(self.borrow().data.powi(power), Op::POW);
+        new_tensor.borrow_mut().power = power;
+        new_tensor.add_to_children(&vec![self.clone()]);
+        new_tensor
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -96,6 +104,7 @@ pub(crate) enum Op {
     NONE,
     ADD,
     MUL,
+    POW,
 }
 
 impl Display for ScalarTensor {
@@ -104,6 +113,7 @@ impl Display for ScalarTensor {
             Op::NONE => "",
             Op::ADD => "+",
             Op::MUL => "*",
+            Op::POW => "**",
         };
         write!(
             f,
@@ -135,6 +145,7 @@ impl ScalarTensor {
             children: Vec::new(),
             op: op,
             unique_id: OBJECT_COUNTER.fetch_add(1, Ordering::SeqCst),
+            power: 0,
         })))
     }
 
@@ -160,6 +171,10 @@ impl ScalarTensor {
                 let mut right = self.children[1].borrow_mut();
                 left.grad += right.data * self.grad;
                 right.grad += left.data * self.grad;
+            }
+            Op::POW => {
+                let mut child = self.children[0].borrow_mut();
+                child.grad += (self.power as f32 * child.data.powi(self.power - 1)) * self.grad
             }
         }
     }
@@ -205,6 +220,14 @@ impl<'a> Add<f32> for &'a MutableScalarTensor {
     }
 }
 
+impl<'a> Add<&'a MutableScalarTensor> for f32 {
+    type Output = MutableScalarTensor;
+
+    fn add(self, rhs: &'a MutableScalarTensor) -> Self::Output {
+        add_tensors(&ScalarTensor::new(self), rhs)
+    }
+}
+
 impl<'a, 'b> Mul<&'b MutableScalarTensor> for &'a MutableScalarTensor {
     type Output = MutableScalarTensor;
 
@@ -221,19 +244,27 @@ impl<'a> Mul<f32> for &'a MutableScalarTensor {
     }
 }
 
-impl<'a> Add<&'a MutableScalarTensor> for f32 {
-    type Output = MutableScalarTensor;
-
-    fn add(self, rhs: &'a MutableScalarTensor) -> Self::Output {
-        add_tensors(&ScalarTensor::new(self), rhs)
-    }
-}
-
 impl<'a> Mul<&'a MutableScalarTensor> for f32 {
     type Output = MutableScalarTensor;
 
     fn mul(self, rhs: &'a MutableScalarTensor) -> Self::Output {
         mul_tensors(&ScalarTensor::new(self), rhs)
+    }
+}
+
+impl<'a, 'b> Sub<&'b MutableScalarTensor> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn sub(self, rhs: &'b MutableScalarTensor) -> Self::Output {
+        add_tensors(self, &(rhs * -1.0))
+    }
+}
+
+impl<'a> Sub<f32> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn sub(self, rhs: f32) -> Self::Output {
+        add_tensors(self, &ScalarTensor::new(rhs * -1.0))
     }
 }
 
@@ -488,5 +519,25 @@ mod tests {
             assert_eq!(2, out2.children.len());
             assert_eq!(Op::MUL, out2.op);
         }
+    }
+
+    #[test]
+    fn test_pow() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = t1.pow(2);
+        assert_eq!(25.0, t2.borrow().data);
+        assert_eq!(2, t2.borrow().power);
+        t2.backward();
+        assert_eq!(1.0, t2.borrow().grad);
+        // dt1 / dt2 = 2 * 5.0;
+        assert_eq!(10.0, t1.borrow().grad);
+    }
+
+    #[test]
+    fn test_sub() {
+        let t1 = ScalarTensor::new(5.0);
+        let t2 = ScalarTensor::new(1.2);
+        let out = &t1 - &t2;
+        assert_eq!(3.8, out.borrow().data);
     }
 }
