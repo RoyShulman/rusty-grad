@@ -163,6 +163,10 @@ impl ScalarTensor {
             }
         }
     }
+
+    pub fn zero_grad(&mut self) {
+        self.grad = 0.0;
+    }
 }
 
 fn add_tensors(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableScalarTensor {
@@ -175,6 +179,14 @@ fn mul_tensors(rhs: &MutableScalarTensor, lhs: &MutableScalarTensor) -> MutableS
     let new_tensor = ScalarTensor::new_with_op(rhs.borrow().data * lhs.borrow().data, Op::MUL);
     new_tensor.add_to_children(&vec![rhs.clone(), lhs.clone()]);
     new_tensor
+}
+
+impl Add for MutableScalarTensor {
+    type Output = Self;
+
+    fn add(self, rhs: MutableScalarTensor) -> Self::Output {
+        add_tensors(&self, &rhs)
+    }
 }
 
 impl<'a, 'b> Add<&'b MutableScalarTensor> for &'a MutableScalarTensor {
