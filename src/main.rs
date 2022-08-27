@@ -51,8 +51,8 @@ fn binary_classifier_example() {
     let mut n = MLP::new(vec![
         LinearLayer::new(3, 4),
         LinearLayer::new(4, 4),
-        LinearLayer::new(4, 1),]
-    );
+        LinearLayer::new(4, 1),
+    ]);
     let xs = vec![
         vec![2.0, 3.0, -1.0],
         vec![3.0, -1.0, 0.5],

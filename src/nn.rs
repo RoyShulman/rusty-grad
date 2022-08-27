@@ -98,6 +98,45 @@ impl Module for LinearLayer {
     }
 }
 
+struct ReluNeuron {}
+
+impl Module for ReluNeuron {
+    fn zero_grad(&mut self) {}
+
+    fn parameters(&self) -> Vec<MutableScalarTensor> {
+        vec![]
+    }
+
+    fn forward(&self, x: &Vec<MutableScalarTensor>) -> Vec<MutableScalarTensor> {
+        // ReLU has the same output dimensions as input
+        x.iter().map(|x| x.relu()).collect()
+    }
+}
+
+pub struct ReluLayer {}
+
+impl ReluLayer {
+    pub fn new() -> Box<Self> {
+        Box::new(Self {})
+    }
+}
+
+impl Module for ReluLayer {
+    fn zero_grad(&mut self) {}
+
+    fn parameters(&self) -> Vec<MutableScalarTensor> {
+        vec![]
+    }
+
+    fn forward(&self, x: &Vec<MutableScalarTensor>) -> Vec<MutableScalarTensor> {
+        let mut result = Vec::new();
+        for x_i in x.iter() {
+            result.extend(ReluNeuron {}.forward(&vec![x_i.clone()]));
+        }
+        result
+    }
+}
+
 pub struct MLP {
     layers: Vec<Box<dyn Module>>,
 }
@@ -189,5 +228,38 @@ mod tests {
         let mlp = MLP::new(vec![LinearLayer::new(2, 5), LinearLayer::new(5, 1)]);
         let result = mlp.scalar_forward(&vec![1.2, 3.5]);
         assert_eq!(1, result.len());
+    }
+
+    #[test]
+    fn test_relu_neuron() {
+        let n = ReluNeuron {};
+        let result = n.forward(&vec![
+            ScalarTensor::new(5.0),
+            ScalarTensor::new(-2.123),
+            ScalarTensor::new(220.0),
+            ScalarTensor::new(3.14),
+            ScalarTensor::new(-3.14),
+        ]);
+        // Output dimensions as input
+        assert_eq!(5, result.len());
+        for (expected, real) in vec![5.0, 0.0, 220.0, 3.14, 0.0].iter().zip(result.iter()) {
+            assert_eq!(*expected, real.borrow().data);
+        }
+    }
+
+    #[test]
+    fn test_relu_layer_forward() {
+        let l = ReluLayer {};
+        let result = l.forward(&vec![ScalarTensor::new(5.0), ScalarTensor::new(3.14)]);
+        assert_eq!(2, result.len());
+    }
+
+    #[test]
+    fn test_mlp_linear_relu() {
+        let mlp = MLP::new(vec![LinearLayer::new(5, 100), ReluLayer::new()]);
+        let result = mlp.scalar_forward(&vec![5.0, 3.41, -1.2, -2.3, 22.2]);
+        for r in result {
+            assert!(r.borrow().data >= 0.0);
+        }
     }
 }
