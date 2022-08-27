@@ -194,7 +194,7 @@ impl ScalarTensor {
             Op::RELU => {
                 let mut child = self.children[0].borrow_mut();
                 // Grad is 0 when the data is negative since then relu outputs 0
-                if self.data >= 0.0 {
+                if self.data > 0.0 {
                     child.grad += 1.0 * self.grad;
                 }
             }
@@ -572,7 +572,7 @@ mod tests {
             let t2 = t2.borrow();
             assert_eq!(5.2, t2.data);
             assert_eq!(1, t2.children.len());
-            
+
             let t1 = t1.borrow();
             assert_eq!(1.0, t1.grad);
         }
@@ -587,9 +587,9 @@ mod tests {
             let t2 = t2.borrow();
             assert_eq!(0.0, t2.data);
             assert_eq!(1, t2.children.len());
-            
+
             let t1 = t1.borrow();
-            assert_eq!(1.0, t1.grad);
+            assert_eq!(0.0, t1.grad);
         }
     }
 }
