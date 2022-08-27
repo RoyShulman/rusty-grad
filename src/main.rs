@@ -6,7 +6,7 @@ mod nn;
 
 use engine::MutableScalarTensor;
 use loss_functions::{plot_loss, EpochLoss};
-use nn::{Module, MLP};
+use nn::{LinearLayer, Module, MLP};
 
 fn sgd(
     n: &mut MLP,
@@ -21,7 +21,7 @@ fn sgd(
         // Forward pass
         let ypreds = inputs
             .iter()
-            .map(|x| n.scalar_forward(x))
+            .map(|x| n.scalar_forward(x).remove(0))
             .collect::<Vec<MutableScalarTensor>>();
         let loss = loss_functions::mse_loss(&ypreds, target);
 
@@ -48,7 +48,11 @@ fn sgd(
 }
 
 fn binary_classifier_example() {
-    let mut n = MLP::new(3, vec![4, 4, 1]);
+    let mut n = MLP::new(vec![
+        LinearLayer::new(3, 4),
+        LinearLayer::new(4, 4),
+        LinearLayer::new(4, 1),]
+    );
     let xs = vec![
         vec![2.0, 3.0, -1.0],
         vec![3.0, -1.0, 0.5],
