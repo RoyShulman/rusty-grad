@@ -97,6 +97,19 @@ impl MutableScalarTensor {
         new_tensor.add_to_children(&vec![self.clone()]);
         new_tensor
     }
+
+    pub fn relu(&self) -> Self {
+        let relu_data;
+        let this_data = self.borrow().data;
+        if this_data >= 0.0 {
+            relu_data = this_data;
+        } else {
+            relu_data = 0.0;
+        }
+        let new_tensor = ScalarTensor::new_with_op(relu_data, Op::RELU);
+        new_tensor.add_to_children(&vec![self.clone()]);
+        new_tensor
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -105,6 +118,7 @@ pub(crate) enum Op {
     ADD,
     MUL,
     POW,
+    RELU,
 }
 
 impl Display for ScalarTensor {
@@ -114,6 +128,7 @@ impl Display for ScalarTensor {
             Op::ADD => "+",
             Op::MUL => "*",
             Op::POW => "**",
+            Op::RELU => "ReLU",
         };
         write!(
             f,
@@ -175,6 +190,13 @@ impl ScalarTensor {
             Op::POW => {
                 let mut child = self.children[0].borrow_mut();
                 child.grad += (self.power as f32 * child.data.powi(self.power - 1)) * self.grad
+            }
+            Op::RELU => {
+                let mut child = self.children[0].borrow_mut();
+                // Grad is 0 when the data is negative since then relu outputs 0
+                if self.data >= 0.0 {
+                    child.grad += 1.0 * self.grad;
+                }
             }
         }
     }
@@ -539,5 +561,35 @@ mod tests {
         let t2 = ScalarTensor::new(1.2);
         let out = &t1 - &t2;
         assert_eq!(3.8, out.borrow().data);
+    }
+
+    #[test]
+    fn test_relu_positive() {
+        let t1 = ScalarTensor::new(5.2);
+        let t2 = t1.relu();
+        t2.backward();
+        {
+            let t2 = t2.borrow();
+            assert_eq!(5.2, t2.data);
+            assert_eq!(1, t2.children.len());
+            
+            let t1 = t1.borrow();
+            assert_eq!(1.0, t1.grad);
+        }
+    }
+
+    #[test]
+    fn test_relu_negative() {
+        let t1 = ScalarTensor::new(-5.2);
+        let t2 = t1.relu();
+        t2.backward();
+        {
+            let t2 = t2.borrow();
+            assert_eq!(0.0, t2.data);
+            assert_eq!(1, t2.children.len());
+            
+            let t1 = t1.borrow();
+            assert_eq!(1.0, t1.grad);
+        }
     }
 }
