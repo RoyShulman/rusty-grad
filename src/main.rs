@@ -4,9 +4,9 @@ mod graph;
 mod loss_functions;
 mod nn;
 
+use engine::MutableScalarTensor;
+use loss_functions::{plot_loss, EpochLoss};
 use nn::{Module, MLP};
-
-use crate::engine::MutableScalarTensor;
 
 fn sgd(
     n: &mut MLP,
@@ -15,6 +15,8 @@ fn sgd(
     num_iterations: usize,
     learning_rate: f32,
 ) {
+    let mut epoch_loss = Vec::new();
+
     for epoch in 0..num_iterations {
         // Forward pass
         let ypreds = inputs
@@ -34,15 +36,15 @@ fn sgd(
             p.data += -learning_rate * p.grad;
         }
 
+        epoch_loss.push(EpochLoss {
+            epoch,
+            loss: loss.borrow().data,
+        });
         println!("epoch: {}, loss: {}", epoch, loss.borrow().data);
     }
-    let ypreds = inputs
-            .iter()
-            .map(|x| n.scalar_forward(x))
-            .collect::<Vec<MutableScalarTensor>>();
-    for pred in ypreds.iter() {
-        println!("{}", pred.borrow().data);
-    }
+
+    // Graph the loss function
+    plot_loss(epoch_loss);
 }
 
 fn binary_classifier_example() {
