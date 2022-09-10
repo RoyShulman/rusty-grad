@@ -1,3 +1,7 @@
 /target
 *.dot
 *.svg
+*.py
+*.png
+*.gv
+*.svg
