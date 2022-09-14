@@ -5,12 +5,12 @@ extern crate flate2;
 
 use std::{error::Error, path::Path};
 
-use dataset_utils::get_training_set;
-use download_utils::download_dataset;
+use dataset_utils::{get_training_set, LabeledImage};
+use download_utils::{download_dataset, download_testset};
 use rand::Rng;
 use rusty_grad::{
     engine::MutableScalarTensor,
-    loss_functions::{self, plot_loss, EpochLoss},
+    loss_functions::{self, plot_loss, EpochLoss, LossReduction},
     nn::{LinearLayer, Module, ReluLayer, MLP},
 };
 
@@ -33,8 +33,11 @@ fn sgd(
             .iter()
             .map(|x| n.scalar_forward(x))
             .collect::<Vec<Vec<MutableScalarTensor>>>();
-        let loss =
-            loss_functions::cross_entropy_loss_sum(&ypreds, &target[num..num + mini_batch_size]);
+        let loss = loss_functions::cross_entropy_loss(
+            &ypreds,
+            &target[num..num + mini_batch_size],
+            LossReduction::MEAN,
+        );
 
         // Backward pass
         n.zero_grad();
@@ -60,21 +63,9 @@ fn sgd(
     }
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let dataset = download_dataset(Path::new("./dataset"))?;
-    let images = get_training_set(&dataset)?;
-    let mut mlp = MLP::new(vec![
-        LinearLayer::new(28 * 28, 16),
-        ReluLayer::new(),
-        // LinearLayer::new(16, 16),
-        // ReluLayer::new(),
-        LinearLayer::new(16, 10),
-        ReluLayer::new(),
-    ]);
-
+fn normalize_input(images: &Vec<LabeledImage>) -> (Vec<Vec<f32>>, Vec<Vec<f32>>) {
     let mut inputs = vec![];
     let mut outputs = vec![];
-
     for image in images.iter() {
         // Normalize input
         inputs.push(
@@ -95,7 +86,73 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         outputs.push(current_label);
     }
-    sgd(&mut mlp, &inputs, &outputs, 1000, 0.001, 20, true);
+
+    (inputs, outputs)
+}
+
+fn get_index_of_max_tensor(it: &[MutableScalarTensor]) -> usize {
+    let mut max = 0.0;
+    let mut index = 0;
+    for (i, prob) in it.iter().enumerate() {
+        let prob = prob.borrow().data;
+        if prob > max {
+            max = prob;
+            index = i;
+        }
+    }
+    index
+}
+
+fn get_index_of_max_f32(it: &[f32]) -> usize {
+    let mut max = 0.0;
+    let mut index = 0;
+    for (i, prob) in it.iter().enumerate() {
+        if *prob > max {
+            max = *prob;
+            index = i;
+        }
+    }
+    index
+}
+
+fn evaluate(mlp: &MLP, inputs: &[Vec<f32>], outputs: &[Vec<f32>]) {
+    let mut correct = 0;
+    for (xs, ys) in inputs.iter().zip(outputs) {
+        let result = mlp.scalar_forward(xs);
+        if get_index_of_max_tensor(&result) == get_index_of_max_f32(&ys) {
+            correct += 1;
+        }
+    }
+
+    println!(
+        "total: {}, correct: {}, percent correct: {}",
+        inputs.len(),
+        correct,
+        correct as f32 / inputs.len() as f32
+    )
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Train
+    let dataset = download_dataset(Path::new("./dataset"))?;
+    let images = get_training_set(&dataset)?;
+    let mut mlp = MLP::new(vec![
+        LinearLayer::new(28 * 28, 8),
+        ReluLayer::new(),
+        LinearLayer::new(8, 8),
+        ReluLayer::new(),
+        LinearLayer::new(8, 10),
+        ReluLayer::new(),
+    ]);
+
+    let (inputs, outputs) = normalize_input(&images);
+    sgd(&mut mlp, &inputs, &outputs, 1000, 0.01, 20, true);
+
+    // Evaluate
+    let testset = download_testset(Path::new("./testset"))?;
+    let test_images = get_training_set(&testset)?;
+    let (test_inputs, test_outputs) = normalize_input(&test_images);
+    evaluate(&mlp, &test_inputs, &test_outputs);
 
     Ok(())
 }

@@ -65,10 +65,17 @@ pub fn softmax(input: &[MutableScalarTensor]) -> Vec<MutableScalarTensor> {
     result
 }
 
+#[derive(PartialEq)]
+pub enum LossReduction {
+    MEAN,
+    SUM,
+}
+
 /// Apply cross entropy, which includes softmax
-pub fn cross_entropy_loss_sum(
+pub fn cross_entropy_loss(
     input: &[Vec<MutableScalarTensor>],
     target: &[Vec<f32>],
+    reduce: LossReduction,
 ) -> MutableScalarTensor {
     if input.len() != target.len() {
         panic!("Input and target dimensions must match");
@@ -80,6 +87,10 @@ pub fn cross_entropy_loss_sum(
         for (x_j, y_j) in normalized.iter().zip(y_i) {
             sum = &sum + &(&x_j.ln() * -*y_j);
         }
+    }
+
+    if reduce == LossReduction::MEAN {
+        sum = &sum / input.len() as f32;
     }
     sum
 }
@@ -128,17 +139,20 @@ mod tests {
         ];
         let target = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
 
-        let real = cross_entropy_loss_sum(&vec![input], &vec![target]);
-        assert!(
-            (real.borrow().data - 2.7252).abs() < 0.0001,
-            "real: {}, expected: {}",
-            real.borrow().data,
-            2.7252
-        );
+        // Reduction should matter on a single tensor
+        for reduction in [LossReduction::SUM, LossReduction::MEAN] {
+            let real = cross_entropy_loss(&vec![input.clone()], &vec![target.clone()], reduction);
+            assert!(
+                (real.borrow().data - 2.7252).abs() < 0.0001,
+                "real: {}, expected: {}",
+                real.borrow().data,
+                2.7252
+            );
+        }
     }
 
     #[test]
-    fn test_cross_entropy_loss_sum_tensors() {
+    fn test_cross_entropy_loss_sum() {
         let input1 = vec![
             ScalarTensor::new(-0.5384),
             ScalarTensor::new(-0.7928),
@@ -167,12 +181,121 @@ mod tests {
         let output1 = vec![0., 0., 0., 0., 0., 1., 0., 0., 0., 0.];
         let output2 = vec![0., 0., 0., 0., 0., 0., 0., 0., 0., 1.];
 
-        let real = cross_entropy_loss_sum(&vec![input1, input2], &vec![output1, output2]);
+        let real = cross_entropy_loss(
+            &vec![input1, input2],
+            &vec![output1, output2],
+            LossReduction::SUM,
+        );
         assert!(
             (real.borrow().data - 6.2383).abs() < 0.001,
             "real: {}, expected: {}",
             real.borrow().data,
             6.2383
+        );
+    }
+
+    #[test]
+    fn test_cross_entropy_loss_mean() {
+        let inputs = [
+            [
+                0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 5.2136, 0.0000, 2.4858, 0.0000, 2.5724,
+            ],
+            [
+                1.4193, 0.0000, 0.3159, 0.0000, 3.8302, 4.9351, 0.0000, 0.0000, 1.2242, 0.0000,
+            ],
+            [
+                9.4651, 0.0000, 3.6780, 0.0000, 7.3900, 6.7230, 0.0000, 0.0000, 0.7136, 9.9240,
+            ],
+            [
+                4.2783, 0.0000, 0.0000, 0.0000, 2.6881, 4.4851, 0.0000, 6.4146, 0.3669, 4.2653,
+            ],
+            [
+                0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 4.2967, 0.0000, 0.0000, 0.1937, 0.0000,
+            ],
+            [
+                2.5722, 0.0000, 4.7754, 0.0000, 0.0000, 0.0000, 0.0000, 0.0840, 4.9622, 0.0000,
+            ],
+            [
+                0.0000, 1.7514, 0.0000, 0.0000, 0.0000, 7.1554, 0.0000, 0.0000, 0.0000, 10.8839,
+            ],
+            [
+                0.0000, 0.0000, 0.1193, 0.0000, 0.0000, 0.0000, 0.0000, 1.4858, 0.0000, 0.0000,
+            ],
+            [
+                1.4163, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 7.1548, 0.0000,
+            ],
+            [
+                0.6866, 1.1895, 6.6810, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 6.4898,
+            ],
+            [
+                0.0000, 0.0000, 2.0479, 0.0000, 0.6218, 0.5415, 0.0000, 0.0000, 0.9339, 0.0000,
+            ],
+            [
+                0.0000, 0.0000, 1.5827, 0.0000, 0.0000, 0.0000, 0.0000, 6.5913, 0.0000, 4.9947,
+            ],
+            [
+                0.0000, 0.0000, 4.3675, 0.0000, 0.0000, 7.1172, 0.0000, 0.0000, 0.0000, 0.0000,
+            ],
+            [
+                0.0000, 0.0000, 0.0000, 0.0000, 0.0000, 1.0198, 0.0000, 0.0000, 0.0000, 7.2033,
+            ],
+            [
+                8.5282, 0.0000, 0.0485, 0.0000, 9.3667, 4.6131, 0.0000, 0.0000, 5.1600, 0.0000,
+            ],
+            [
+                0.0000, 0.0000, 5.3622, 0.0000, 0.0000, 2.7705, 0.0000, 0.0000, 0.0000, 9.0917,
+            ],
+            [
+                0.0000, 0.0000, 0.0000, 1.5794, 0.3976, 0.0000, 0.0000, 5.7793, 1.9515, 0.0000,
+            ],
+            [
+                0.0000, 0.5745, 5.2741, 0.0000, 0.0000, 1.0341, 0.0000, 0.0000, 0.0000, 0.0000,
+            ],
+            [
+                0.0000, 0.0000, 6.3219, 0.0000, 0.0000, 0.0000, 0.0000, 2.1995, 1.7168, 0.0000,
+            ],
+            [
+                1.0281, 0.0000, 9.5872, 0.0000, 1.3884, 7.7158, 0.0000, 0.0000, 0.0000, 3.0671,
+            ],
+        ];
+        let mut xs: Vec<Vec<MutableScalarTensor>> = vec![];
+        for input in inputs {
+            xs.push(input.iter().map(|x| ScalarTensor::new(*x)).collect());
+        }
+
+        let outputs = [
+            [0., 0., 0., 0., 0., 0., 0., 0., 1., 0.],
+            [0., 0., 0., 1., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
+            [0., 0., 0., 0., 0., 0., 1., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 0., 1., 0.],
+            [0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 1., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 0., 1., 0.],
+            [0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 1., 0., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 1., 0., 0.],
+            [1., 0., 0., 0., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 1., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 1., 0., 0., 0.],
+            [0., 0., 0., 1., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 1., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 1., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
+            [0., 1., 0., 0., 0., 0., 0., 0., 0., 0.],
+            [0., 0., 0., 0., 0., 0., 0., 0., 0., 1.],
+        ];
+
+        let mut ys: Vec<Vec<f32>> = vec![];
+        for output in outputs {
+            ys.push(output.iter().map(|x| *x).collect());
+        }
+
+        let real = cross_entropy_loss(&xs, &ys, LossReduction::MEAN);
+        assert!(
+            (real.borrow().data - 5.8185).abs() < 0.001,
+            "{}",
+            real.borrow().data
         );
     }
 }
