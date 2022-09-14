@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 rusty-grad = { path = "../../rusty-grad" }
+reqwest = { version = "0.11", features = ["blocking"] }
+flate2 = "1.0"
+rand = "0.8.5"
