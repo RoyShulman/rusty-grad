@@ -65,8 +65,7 @@ pub fn softmax(input: &[MutableScalarTensor]) -> Vec<MutableScalarTensor> {
     result
 }
 
-///
-/// Apply cross entropu, which includes softmax
+/// Apply cross entropy, which includes softmax
 pub fn cross_entropy_loss_sum(
     input: &[Vec<MutableScalarTensor>],
     target: &[Vec<f32>],
@@ -111,5 +110,69 @@ mod tests {
             let y = y_i.borrow().data;
             assert!((x - y).abs() < 0.001, "{}, {}", x, y);
         }
+    }
+
+    #[test]
+    fn test_cross_entropy_loss_single_tensor() {
+        let input = vec![
+            ScalarTensor::new(0.8938),
+            ScalarTensor::new(-0.7245),
+            ScalarTensor::new(0.2932),
+            ScalarTensor::new(0.9960),
+            ScalarTensor::new(1.8179),
+            ScalarTensor::new(0.2327),
+            ScalarTensor::new(-0.3215),
+            ScalarTensor::new(0.9681),
+            ScalarTensor::new(0.2355),
+            ScalarTensor::new(-1.4423),
+        ];
+        let target = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+
+        let real = cross_entropy_loss_sum(&vec![input], &vec![target]);
+        assert!(
+            (real.borrow().data - 2.7252).abs() < 0.0001,
+            "real: {}, expected: {}",
+            real.borrow().data,
+            2.7252
+        );
+    }
+
+    #[test]
+    fn test_cross_entropy_loss_sum_tensors() {
+        let input1 = vec![
+            ScalarTensor::new(-0.5384),
+            ScalarTensor::new(-0.7928),
+            ScalarTensor::new(-0.2381),
+            ScalarTensor::new(1.4723),
+            ScalarTensor::new(0.8172),
+            ScalarTensor::new(0.1298),
+            ScalarTensor::new(0.7332),
+            ScalarTensor::new(0.4451),
+            ScalarTensor::new(-1.1762),
+            ScalarTensor::new(0.6778),
+        ];
+        let input2 = vec![
+            ScalarTensor::new(0.6386),
+            ScalarTensor::new(-0.8578),
+            ScalarTensor::new(-0.9771),
+            ScalarTensor::new(0.8304),
+            ScalarTensor::new(-1.4483),
+            ScalarTensor::new(-0.1740),
+            ScalarTensor::new(2.8277),
+            ScalarTensor::new(-0.3276),
+            ScalarTensor::new(0.6212),
+            ScalarTensor::new(-0.3592),
+        ];
+
+        let output1 = vec![0., 0., 0., 0., 0., 1., 0., 0., 0., 0.];
+        let output2 = vec![0., 0., 0., 0., 0., 0., 0., 0., 0., 1.];
+
+        let real = cross_entropy_loss_sum(&vec![input1, input2], &vec![output1, output2]);
+        assert!(
+            (real.borrow().data - 6.2383).abs() < 0.001,
+            "real: {}, expected: {}",
+            real.borrow().data,
+            6.2383
+        );
     }
 }
