@@ -3,7 +3,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     hash::{Hash, Hasher},
-    ops::{Add, Deref, DerefMut, Mul, Sub},
+    ops::{Add, Deref, DerefMut, Div, Mul, Sub},
     rc::Rc,
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -110,6 +110,18 @@ impl MutableScalarTensor {
         new_tensor.add_to_children(&vec![self.clone()]);
         new_tensor
     }
+
+    pub fn ln(&self) -> Self {
+        let new_tensor = ScalarTensor::new_with_op(self.borrow().data.ln(), Op::LN);
+        new_tensor.add_to_children(&vec![self.clone()]);
+        new_tensor
+    }
+
+    pub fn exp(&self) -> Self {
+        let new_tensor = ScalarTensor::new_with_op(self.borrow().data.exp(), Op::EXP);
+        new_tensor.add_to_children(&vec![self.clone()]);
+        new_tensor
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -119,6 +131,8 @@ pub(crate) enum Op {
     MUL,
     POW,
     RELU,
+    LN,
+    EXP,
 }
 
 impl Display for ScalarTensor {
@@ -129,6 +143,8 @@ impl Display for ScalarTensor {
             Op::MUL => "*",
             Op::POW => "**",
             Op::RELU => "ReLU",
+            Op::LN => "ln",
+            Op::EXP => "exp",
         };
         write!(
             f,
@@ -197,6 +213,14 @@ impl ScalarTensor {
                 if self.data > 0.0 {
                     child.grad += 1.0 * self.grad;
                 }
+            }
+            Op::LN => {
+                let mut child = self.children[0].borrow_mut();
+                child.grad += (1.0 / child.data) * self.grad;
+            }
+            Op::EXP => {
+                let mut child = self.children[0].borrow_mut();
+                child.grad += self.data * self.grad;
             }
         }
     }
@@ -287,6 +311,22 @@ impl<'a> Sub<f32> for &'a MutableScalarTensor {
 
     fn sub(self, rhs: f32) -> Self::Output {
         add_tensors(self, &ScalarTensor::new(rhs * -1.0))
+    }
+}
+
+impl<'a, 'b> Div<&'b MutableScalarTensor> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn div(self, rhs: &'b MutableScalarTensor) -> Self::Output {
+        mul_tensors(self, &(rhs.pow(-1)))
+    }
+}
+
+impl<'a> Div<f32> for &'a MutableScalarTensor {
+    type Output = MutableScalarTensor;
+
+    fn div(self, rhs: f32) -> Self::Output {
+        mul_tensors(self, &ScalarTensor::new(rhs.powi(-1)))
     }
 }
 
@@ -590,6 +630,70 @@ mod tests {
 
             let t1 = t1.borrow();
             assert_eq!(0.0, t1.grad);
+        }
+    }
+
+    #[test]
+    fn test_ln() {
+        let t1 = ScalarTensor::new(2.0);
+        let t2 = t1.ln();
+        t2.backward();
+        {
+            let t2 = t2.borrow();
+            assert_eq!(2.0_f32.ln(), t2.data);
+            assert_eq!(1, t2.children.len());
+
+            let t1 = t1.borrow();
+            assert_eq!(0.5, t1.grad);
+        }
+    }
+
+    #[test]
+    fn test_exp() {
+        let t1 = ScalarTensor::new(2.0);
+        let t2 = t1.exp();
+        t2.backward();
+        {
+            let t2 = t2.borrow();
+            assert_eq!(2.0_f32.exp(), t2.data);
+            assert_eq!(1, t2.children.len());
+
+            let t1 = t1.borrow();
+            assert_eq!(2.0_f32.exp(), t1.grad);
+        }
+    }
+
+    #[test]
+    fn test_div_f32() {
+        let t1 = ScalarTensor::new(10.0);
+        let t2 = &t1 / 2.0;
+        t2.backward();
+        {
+            let t2 = t2.borrow();
+            assert_eq!(5.0, t2.data);
+            assert_eq!(2, t2.children.len());
+
+            let t1 = t1.borrow();
+            assert_eq!(1.0 / 2.0, t1.grad);
+        }
+    }
+
+    #[test]
+    fn test_div() {
+        let t1 = ScalarTensor::new(4.5);
+        let t2 = ScalarTensor::new(36.0);
+        let output = &t2 / &t1;
+        output.backward();
+        {
+            let output = output.borrow();
+            assert_eq!(8.0, output.data);
+            assert_eq!(2, output.children.len());
+
+            // doutput/dt1 = 36 * -(1/4.5)**2
+            let t1 = t1.borrow();
+            assert_eq!(-(1.0 / 4.5) * (1.0 / 4.5) * 36.0, t1.grad);
+            let t2 = t2.borrow();
+            assert_eq!(1.0 / 4.5, t2.grad);
         }
     }
 }

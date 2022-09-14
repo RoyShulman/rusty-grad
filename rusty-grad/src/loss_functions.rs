@@ -51,3 +51,65 @@ pub fn mse_loss(input: &Vec<MutableScalarTensor>, target: &Vec<f32>) -> MutableS
     }
     loss
 }
+
+pub fn softmax(input: &[MutableScalarTensor]) -> Vec<MutableScalarTensor> {
+    let mut result = vec![];
+    let mut sum = ScalarTensor::new(0.0);
+    for x_i in input.iter() {
+        sum = sum + x_i.exp();
+    }
+
+    for x_i in input.iter() {
+        result.push(&x_i.exp() / &sum);
+    }
+    result
+}
+
+///
+/// Apply cross entropu, which includes softmax
+pub fn cross_entropy_loss_sum(
+    input: &[Vec<MutableScalarTensor>],
+    target: &[Vec<f32>],
+) -> MutableScalarTensor {
+    if input.len() != target.len() {
+        panic!("Input and target dimensions must match");
+    }
+
+    let mut sum = ScalarTensor::new(0.0);
+    for (x_i, y_i) in input.iter().zip(target) {
+        let normalized = softmax(x_i);
+        for (x_j, y_j) in normalized.iter().zip(y_i) {
+            sum = &sum + &(&x_j.ln() * -*y_j);
+        }
+    }
+    sum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_softmax() {
+        let input = vec![
+            ScalarTensor::new(-0.0654),
+            ScalarTensor::new(-1.1302),
+            ScalarTensor::new(0.8120),
+            ScalarTensor::new(0.9402),
+        ];
+        let expected = vec![
+            ScalarTensor::new(0.1542),
+            ScalarTensor::new(0.0532),
+            ScalarTensor::new(0.3709),
+            ScalarTensor::new(0.4217),
+        ];
+
+        let normalized = softmax(&input);
+
+        for (x_i, y_i) in normalized.iter().zip(expected) {
+            let x = x_i.borrow().data;
+            let y = y_i.borrow().data;
+            assert!((x - y).abs() < 0.001, "{}, {}", x, y);
+        }
+    }
+}
